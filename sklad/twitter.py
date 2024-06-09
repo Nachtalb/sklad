@@ -97,6 +97,9 @@ class Twitter:
             return BytesIO(await response.read())
 
     async def get_tweet_by_id(self, tweet_id: str | int) -> Tweet | None:
+        if tweet := Tweet.get_or_none(Tweet.tweet_id == tweet_id):
+            return tweet  # type: ignore[no-any-return]
+
         try:
             tweet = await self.client.get_tweet_by_id(str(tweet_id))
         except TweetNotAvailable:

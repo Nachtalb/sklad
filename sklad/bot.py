@@ -1,5 +1,6 @@
 import logging
 import re
+from asyncio import as_completed
 
 from telegram import InputMediaPhoto, InputMediaVideo, Message, Update
 from telegram.constants import ParseMode
@@ -116,29 +117,41 @@ class Bot:
         if not update.effective_user or not update.message:
             return
 
-        text = context.args[0] if context.args else update.message.text
-        if not text:
-            await update.message.reply_text("Please provide a tweet id or url")
-            return
-
-        tweet_id = self._get_tweet_id_from_text(text)
-
-        if not tweet_id:
-            await update.message.reply_text("Invalid tweet id or url")
-            return
-
         if not self._check_logged_in(update.effective_user.id):
             await update.message.reply_text("You are not logged in.")
             return
 
-        twitter = await self._get_twitter(update.effective_user.id)
-        tweet = await twitter.get_tweet_by_id(tweet_id)
-
-        if tweet is None:
-            await update.message.reply_text("Tweet not found")
+        text = set(
+            context.args
+            if context.args
+            else update.message.text.replace("\n", " ").split(" ") if update.message.text else []
+        )
+        if not text:
+            await update.message.reply_text("Please provide a tweet id or url")
             return
 
-        await self.send_tweet(tweet, update.message)
+        ids = set(filter(None, [self._get_tweet_id_from_text(t) for t in text]))
+        if not any(ids):
+            await update.message.reply_text("Invalid tweet id or url")
+            return
+        elif len(ids) != len(text):
+            await update.message.reply_text("Not all tweet ids or urls are valid or duplicates are present")
+
+        twitter = await self._get_twitter(update.effective_user.id)
+
+        not_found = sent = False
+        for future in as_completed([twitter.get_tweet_by_id(tweet_id) for tweet_id in ids]):
+            tweet = await future
+            if tweet is None:
+                not_found = True
+                continue
+            sent = True
+            await self.send_tweet(tweet, update.message)
+
+        if not sent:
+            await update.message.reply_text("No tweets found")
+        elif not_found:
+            await update.message.reply_text("Some tweets were not found")
 
     def _get_tweet_id_from_text(self, text: str) -> str | None:
         text = text.strip()
