@@ -59,6 +59,10 @@ class User(BaseModel):
     role = CharField(default="user")
     telegram_id = IntegerField(null=True)
 
+    twitter_username = CharField(null=True)
+    twitter_email = CharField(null=True)
+    twitter_password = CharField(null=True)
+
     def __str__(self) -> str:
         return self.username  # type: ignore[no-any-return]
 
