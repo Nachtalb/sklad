@@ -116,20 +116,16 @@ class Bot:
         if not update.effective_user or not update.message:
             return
 
-        if not context.args:
+        text = context.args[0] if context.args else update.message.text
+        if not text:
             await update.message.reply_text("Please provide a tweet id or url")
             return
 
-        tweet_id_url = context.args[0]
+        tweet_id = self._get_tweet_id_from_text(text)
 
-        if not tweet_id_url.isdigit():
-            try:
-                tweet_id = URL(tweet_id_url).name
-            except ValueError:
-                await update.message.reply_text("Invalid tweet url")
-                return
-        else:
-            tweet_id = tweet_id_url
+        if not tweet_id:
+            await update.message.reply_text("Invalid tweet id or url")
+            return
 
         if not self._check_logged_in(update.effective_user.id):
             await update.message.reply_text("You are not logged in.")
@@ -143,6 +139,19 @@ class Bot:
             return
 
         await self.send_tweet(tweet, update.message)
+
+    def _get_tweet_id_from_text(self, text: str) -> str | None:
+        text = text.strip()
+        if text.isdigit():
+            return text
+
+        try:
+            url = URL(text)
+            if url.name.isdigit():
+                return url.name
+        except ValueError:
+            pass
+        return None
 
     async def post_init(self, application: Application) -> None:  # type: ignore[type-arg]
         self.logger.info("Sklad Started")
