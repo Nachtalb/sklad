@@ -8,6 +8,8 @@ license = "LGPL-3.0"
 
 [tool.poetry.dependencies]
 python = "^3.12"
+twikit = "^1.7.4"
+python-telegram-bot = {extras = ["all"], version = "^21.3"}
 
 [tool.poetry.group.dev.dependencies]
 black = "^24.4.2"
@@ -28,13 +30,13 @@ line_length = 120
 [tool.black]
 line-length = 120
 preview = true
-target-version = ["py311"]
+target-version = ["py312"]
 
 [tool.ruff]
 line-length = 120
 
 [tool.mypy]
-python_version = "3.11"
+python_version = "3.12"
 show_error_codes = true
 pretty = true
 strict = true
@@ -42,3 +44,6 @@ strict = true
 [[tool.mypy.overrides]]
 module = 'tests'
 no_warn_no_return = true
+
+[tool.poetry.scripts]
+sklad-bot = "sklad.main:main"
