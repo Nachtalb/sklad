@@ -48,10 +48,24 @@ class Tweet(BaseModel):
     user_id = IntegerField()
     user_name = CharField()
     user_screen_name = CharField()
-    main_attachment = JSONField(null=True)
+    attachments = JSONField(null=True)
 
     processed = BooleanField(default=False)
     processed_at = DateTimeField(null=True)
+
+    def __repr__(self) -> str:
+        return f"<Tweet {self.tweet_id} by {self.user_screen_name}>"
+
+    def __str__(self) -> str:
+        return self.text  # type: ignore[no-any-return]
+
+    @property
+    def user_url(self) -> str:
+        return f"https://twitter.com/{self.user_screen_name}"
+
+    @property
+    def url(self) -> str:
+        return f"https://twitter.com/{self.user_screen_name}/status/{self.tweet_id}"
 
 
 class User(BaseModel):
@@ -63,6 +77,8 @@ class User(BaseModel):
     twitter_email = CharField(null=True)
     twitter_password = CharField(null=True)
 
+    twitter_cookies = JSONField(null=True)
+
     def __str__(self) -> str:
         return self.username  # type: ignore[no-any-return]
 
@@ -70,5 +86,5 @@ class User(BaseModel):
 def setup_db() -> SqliteDatabase:
     global DATABASE
     DATABASE.connect()
-    DATABASE.create_tables([User])
+    DATABASE.create_tables([User, Tweet])
     return DATABASE

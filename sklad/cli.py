@@ -13,13 +13,26 @@ logger = logging.getLogger("sklad")
 def add_user(args: argparse.Namespace) -> None:
     logger.info(f"Adding user {args.username} with telegram id {args.telegram_id}")
     setup_db()
-    User.create(username=args.username, telegram_id=args.telegram_id).save()
+    user = User.get_or_none(User.username == args.username)
+    if user:
+        logger.error(f"User {args.username} already exists")
+        return
+    User.create(
+        username=args.username,
+        telegram_id=args.telegram_id,
+        twitter_username=args.twitter_username,
+        twitter_email=args.twitter_email,
+        twitter_password=args.twitter_password,
+    ).save()
 
 
 def del_user(args: argparse.Namespace) -> None:
     logger.info(f"Deleting user {args.username}")
     setup_db()
     user = User.get(User.username == args.username)
+    if not user:
+        logger.error(f"User {args.username} does not exist")
+        return
     user.delete_instance()
 
 
@@ -27,8 +40,20 @@ def list_users(args: argparse.Namespace) -> None:
     logger.info("Listing users")
     setup_db()
     users = User.select()
-    data = [(user.id, user.username, user.telegram_id) for user in users]
-    print(tabulate(data, headers=["ID", "Username", "Telegram ID"]))
+    if not users:
+        logger.info("No users found")
+        return
+
+    data = []
+    for user in [user.to_dict() for user in users]:
+        user["twitter_password"] = "********"
+        data.append(user.values())
+
+    print(
+        tabulate(
+            data, headers=["ID", "Username", "Telegram ID", "Twitter Username", "Twitter Email", "Twitter Password"]
+        )
+    )
 
 
 def main() -> None:
@@ -42,6 +67,9 @@ def main() -> None:
     user_add_parser = sub_user_parsers.add_parser("add")
     user_add_parser.add_argument("username")
     user_add_parser.add_argument("telegram_id")
+    user_add_parser.add_argument("--twitter-username", default=None)
+    user_add_parser.add_argument("--twitter-email", default=None)
+    user_add_parser.add_argument("--twitter-password", default=None)
     user_add_parser.set_defaults(func=add_user)
 
     user_list_parser = sub_user_parsers.add_parser("list")
