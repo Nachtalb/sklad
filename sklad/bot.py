@@ -78,7 +78,7 @@ class Bot:
         input_media: list[InputMediaVideo | InputMediaPhoto] = []
         for media in attachments:
             if media["type"] == "photo":
-                input_media.append(InputMediaPhoto(media["url"], caption=caption, parse_mode=ParseMode.HTML))
+                input_media.append(InputMediaPhoto(media["url"]))
             elif media["type"] in ("video", "gif"):
                 input_media.append(
                     InputMediaVideo(
