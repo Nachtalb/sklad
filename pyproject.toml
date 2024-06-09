@@ -9,8 +9,11 @@ license = "LGPL-3.0"
 [tool.poetry.dependencies]
 python = "^3.12"
 twikit = "^1.7.4"
-python-telegram-bot = {extras = ["all"], version = "^21.3"}
+python-telegram-bot = { extras = ["all"], version = "^21.3" }
 
+peewee = "^3.17.5"
+tabulate = "^0.9.0"
+types-tabulate = "^0.9.0.20240106"
 [tool.poetry.group.dev.dependencies]
 black = "^24.4.2"
 ipdb = "^0.13.13"
@@ -45,5 +48,18 @@ strict = true
 module = 'tests'
 no_warn_no_return = true
 
+[[tool.mypy.overrides]]
+module = 'peewee'
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = 'playhouse.shortcuts'
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = 'playhouse.sqlite_ext'
+ignore_missing_imports = true
+
 [tool.poetry.scripts]
+sklad = "sklad.cli:main"
 sklad-bot = "sklad.main:main"

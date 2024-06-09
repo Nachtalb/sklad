@@ -230,3 +230,4 @@ tags
 # End of https://www.toptal.com/developers/gitignore/api/python,vim,linux,visualstudiocode
 
 *.dat
+*.db
