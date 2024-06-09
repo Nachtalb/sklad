@@ -83,8 +83,6 @@ class Bot:
                     InputMediaVideo(
                         media["url"],
                         thumbnail=media["thumbnail_url"],
-                        caption=caption,
-                        parse_mode=ParseMode.HTML,
                         width=media["width"],
                         height=media["height"],
                     )
@@ -92,9 +90,8 @@ class Bot:
             else:
                 self.logger.warning("Unknown attachment type: %s", media["type"])
                 continue
-            caption = None
 
-        return await message.reply_media_group(media=input_media)
+        return await message.reply_media_group(media=input_media, caption=caption, parse_mode=ParseMode.HTML)
 
     async def send_tweet(self, tweet: Tweet, message: Message) -> tuple[Message, ...]:
         caption = f'{tweet.text}\n\n<a href="{tweet.url}">View on Twitter</a> | <a href="{tweet.user_url}">{tweet.user_name}</a>'
