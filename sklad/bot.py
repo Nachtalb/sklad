@@ -215,14 +215,20 @@ class Bot:
     async def _button_next_tweet(self, message: Message, data: dict[str, Any]) -> None:
         current_tweet = Tweet.get_or_none(Tweet.id == data["tweet_id"])
         next_tweet = (
-            Tweet.select().where(Tweet.created_at < current_tweet.created_at).order_by(Tweet.created_at.desc()).first()
+            Tweet.select()
+            .where((Tweet.created_at < current_tweet.created_at) & Tweet.processed == False)  # noqa: E712
+            .order_by(Tweet.created_at.desc())
+            .first()
         )
         await self._new_timeline_tweet(message, data, next_tweet)
 
     async def _button_previous_tweet(self, message: Message, data: dict[str, Any]) -> None:
         current_tweet = Tweet.get_or_none(Tweet.id == data["tweet_id"])
         previous_tweet = (
-            Tweet.select().where(Tweet.created_at > current_tweet.created_at).order_by(Tweet.created_at.asc()).first()
+            Tweet.select()
+            .where((Tweet.created_at > current_tweet.created_at) & (Tweet.processed == False))  # noqa: E712
+            .order_by(Tweet.created_at.asc())
+            .first()
         )
         await self._new_timeline_tweet(message, data, previous_tweet)
 
@@ -281,8 +287,8 @@ class Bot:
         if not update.effective_user or not update.message:
             return
 
-        # tweets = Tweet.select().where(Tweet.processed == False).order_by(Tweet.created_at.desc()).limit(1)  # noqa: E712
-        tweets = Tweet.select().order_by(Tweet.created_at.desc()).limit(1)  # noqa: E712
+        tweets = Tweet.select().where(Tweet.processed == False).order_by(Tweet.created_at.desc()).limit(1)  # noqa: E712
+        #  tweets = Tweet.select().order_by(Tweet.created_at.desc()).limit(1)  # noqa: E712
         if not tweets:
             await update.message.reply_text("No tweets found")
             return
