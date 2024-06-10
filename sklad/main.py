@@ -3,7 +3,14 @@ import logging
 from functools import reduce
 
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, PicklePersistence, filters
+from telegram.ext import (
+    ApplicationBuilder,
+    CallbackQueryHandler,
+    CommandHandler,
+    MessageHandler,
+    PicklePersistence,
+    filters,
+)
 
 from .bot import Bot
 
@@ -56,7 +63,9 @@ def main() -> None:
     app.add_handler(CommandHandler("start", bot.start, filters=default_filter))
     app.add_handler(CommandHandler("login", bot.login, filters=default_filter))
     app.add_handler(CommandHandler("tweet", bot.send_tweet_by_id_url, filters=default_filter))
+    app.add_handler(CommandHandler("timeline", bot.get_timeline, filters=default_filter))
     app.add_handler(MessageHandler(default_filter & filters.TEXT, bot.send_tweet_by_id_url))
+    app.add_handler(CallbackQueryHandler(bot.callback_query_handler))
 
     if hasattr(args, "webhook"):
         app.run_webhook(

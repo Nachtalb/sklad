@@ -46,7 +46,7 @@ class Twitter:
 
     def get_relevant_media_info(self, data: list[dict[str, Any]]) -> list[TwitterMedia]:
         attachments = []
-        for attachment in data:
+        for attachment in data or []:
             if attachment["type"] == "photo":
                 size = attachment["sizes"]["medium"]
                 url = str(self._custom_img_url(attachment["media_url_https"], size="medium", format="jpg"))

@@ -1,8 +1,10 @@
 import logging
 import re
 from asyncio import as_completed
+from typing import Any, cast
 
-from telegram import InputMediaPhoto, InputMediaVideo, Message, Update
+from telegram import Bot as TelegramBot
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, InputMediaVideo, Message, Update
 from telegram.constants import ParseMode
 from telegram.ext import Application, ContextTypes
 from yarl import URL
@@ -96,14 +98,20 @@ class Bot:
 
         return await message.reply_media_group(media=input_media, caption=caption, parse_mode=ParseMode.HTML)
 
-    async def send_tweet(self, tweet: Tweet, message: Message) -> tuple[Message, ...]:
+    def _get_tweet_caption(self, tweet: Tweet) -> str:
         caption = f'{tweet.text}\n\n<a href="{tweet.url}">View on Twitter</a> | <a href="{tweet.user_url}">{tweet.user_name}</a>'
         caption = self._replace_mentions(caption)
+        return caption
 
+    async def send_tweet(self, tweet: Tweet, message: Message, no_caption: bool = False) -> tuple[Message, ...]:
+        caption = None if no_caption else self._get_tweet_caption(tweet)
         attachments: list[TwitterMedia] = tweet.attachments
 
+        if caption is None and not attachments:
+            raise ValueError("No caption or attachments found")
+
         if not attachments:
-            return (await message.reply_text(caption, parse_mode=ParseMode.HTML),)
+            return (await message.reply_text(caption, parse_mode=ParseMode.HTML),)  # type: ignore[arg-type]
         elif len(attachments) == 1:
             return (await self.send_single_tweet_attachment(attachments[0], message, caption),)
         else:
@@ -114,6 +122,110 @@ class Bot:
 
     def _replace_mentions(self, text: str) -> str:
         return re.sub(r"@(\w+)", r'<a href="https://twitter.com/\1">@\1</a>', text)
+
+    async def callback_query_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not update.effective_user or not update.callback_query or not update.callback_query.data:
+            return
+
+        query = update.callback_query
+
+        try:
+            data = cast(dict[str, Any], query.data)
+            if "action" not in data:
+                raise TypeError("No action found in data")
+        except TypeError:
+            await query.answer()
+            await query.message.delete()  # type: ignore[union-attr]
+            return
+
+        match data["action"]:
+            case "next_tweet":
+                await query.answer("Not implemented")
+            case "previous_tweet":
+                await query.answer("Not implemented")
+            case "send_to_verus:":
+                await query.answer("Not implemented")
+            case "skip_tweet":
+                await query.answer("Not implemented")
+            case _:
+                self.logger.warning("Unknown action: %s", data["action"])
+                await query.answer("Unknown action")
+
+    def _buttons_to_markup(self, buttons: list[dict[str, Any]], cols: int = 2) -> InlineKeyboardMarkup:
+        return InlineKeyboardMarkup(
+            [[InlineKeyboardButton(**button) for button in buttons[i : i + cols]] for i in range(0, len(buttons), cols)]
+        )
+
+    async def send_tweet_manage_buttons(
+        self, bot: TelegramBot, user_id: int, tweet: Tweet, data: dict[str, Any]
+    ) -> None:
+        if user_id not in self.twitters:
+            return
+
+        new_data = {
+            "tweet_id": tweet.id,
+            "user_id": user_id,
+        }
+
+        match data["action"]:
+            case "setup":
+                new_data["message_ids"] = data["message_ids"]
+            case _:
+                return
+
+        buttons = [
+            {"text": "Next Tweet", "callback_data": {"action": "next_tweet", **new_data}},
+            {"text": "Previous Tweet", "callback_data": {"action": "previous_tweet", **new_data}},
+            {"text": "Send to Verus", "callback_data": {"action": "send_to_verus", **new_data}},
+            {"text": "Skip Tweet", "callback_data": {"action": "skip_tweet", **new_data}},
+        ]
+
+        await bot.send_message(
+            user_id,
+            self._get_tweet_caption(tweet),
+            reply_markup=self._buttons_to_markup(buttons),
+            parse_mode=ParseMode.HTML,
+        )
+
+    async def send_latest_tweet(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not update.effective_user or not update.message:
+            return
+
+        tweets = Tweet.select().where(Tweet.processed == False).order_by(Tweet.created_at.desc()).limit(1)  # noqa: E712
+        if not tweets:
+            await update.message.reply_text("No tweets found")
+            return
+
+        messages = await self.send_tweet(tweets[0], update.message, no_caption=True)
+
+        if not messages:
+            await update.message.reply_text("No tweets found")
+            return
+
+        await self.send_tweet_manage_buttons(
+            context.bot,
+            update.effective_user.id,
+            tweets[0],
+            {"action": "setup", "message_ids": [m.message_id for m in messages]},
+        )
+
+    async def get_timeline(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not update.effective_user or not update.message:
+            return
+
+        if not self._check_logged_in(update.effective_user.id):
+            await update.message.reply_text("You are not logged in.")
+            return
+
+        progress = await update.message.reply_text("Getting timeline...")
+        twitter = await self._get_twitter(update.effective_user.id)
+        tweets = await twitter.get_timeline()
+        await progress.delete()
+
+        if not tweets:
+            await update.message.reply_text("No tweets found")
+            return
+        await self.send_latest_tweet(update, context)
 
     async def send_tweet_by_id_url(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.effective_user or not update.message:
@@ -178,6 +290,7 @@ class Bot:
             [
                 ("login", "Login into twitter"),
                 ("tweet", "Send a tweet by id or url"),
+                ("timeline", "Get your timeline"),
             ]
         )
 
