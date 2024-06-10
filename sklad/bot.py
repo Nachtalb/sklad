@@ -149,7 +149,8 @@ class Bot:
         return messages
 
     def _get_tweet_caption(self, tweet: Tweet) -> str:
-        caption = f'{tweet.text}\n\n<a href="{tweet.url}">View on Twitter</a> | <a href="{tweet.user_url}">{tweet.user_name}</a>'
+        processed = " | Processed" if tweet.processed else ""
+        caption = f'{tweet.text}\n\n<a href="{tweet.url}">View on Twitter</a> | <a href="{tweet.user_url}">{tweet.user_name}</a>{processed}'
         caption = self._replace_mentions(caption)
         return caption
 
@@ -216,7 +217,7 @@ class Bot:
         current_tweet = Tweet.get_or_none(Tweet.id == data["tweet_id"])
         next_tweet = (
             Tweet.select()
-            .where((Tweet.created_at < current_tweet.created_at) & Tweet.processed == False)  # noqa: E712
+            .where((Tweet.created_at < current_tweet.created_at) & (Tweet.processed == False))  # noqa: E712
             .order_by(Tweet.created_at.desc())
             .first()
         )
@@ -231,6 +232,33 @@ class Bot:
             .first()
         )
         await self._new_timeline_tweet(message, data, previous_tweet)
+
+    async def _button_reset_progress(self, message: Message, data: dict[str, Any]) -> None:
+        tweet = Tweet.get_or_none(Tweet.id == data["tweet_id"])
+        if not tweet:
+            return
+
+        processed = Tweet.update(processed=False).where(Tweet.processed == True)  # noqa: E712
+        processed.execute()
+
+        await self._new_timeline_tweet(message, data, tweet)
+
+    async def _button_send_to_verus(self, message: Message, data: dict[str, Any]) -> None:
+        tweet = Tweet.get_or_none(Tweet.id == data["tweet_id"])
+        if not tweet:
+            return
+
+        tweet.processed = True
+        tweet.save()
+
+        await self._button_next_tweet(message, data)
+
+    async def _button_to_latest(self, message: Message, data: dict[str, Any]) -> None:
+        tweet = Tweet.select().where(Tweet.processed == False).order_by(Tweet.created_at.desc()).first()  # noqa: E712
+        if not tweet:
+            await message.edit_text("No more tweets found")
+            return
+        await self._new_timeline_tweet(message, data, tweet)
 
     async def _new_timeline_tweet(self, message: Message, data: dict[str, Any], tweet: Tweet) -> None:
         if "message_ids" in data:
@@ -268,6 +296,8 @@ class Bot:
             {"text": "Next Tweet", "callback_data": {"action": "next_tweet", **data}},
             {"text": "Previous Tweet", "callback_data": {"action": "previous_tweet", **data}},
             {"text": "Send to Verus", "callback_data": {"action": "send_to_verus", **data}},
+            {"text": "Reset Progress", "callback_data": {"action": "reset_progress", **data}},
+            {"text": "To Latest", "callback_data": {"action": "to_latest", **data}},
         ]
 
         if previous_msg_id:
