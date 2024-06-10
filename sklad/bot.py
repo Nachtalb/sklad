@@ -24,7 +24,9 @@ class Bot:
         return self.twitters[user_id]
 
     async def _get_logged_in_twitter(self, user: User) -> Twitter:
-        if not user.twitter_username or not user.twitter_email or not user.twitter_password:
+        if (not user.twitter_username or not user.twitter_email or not user.twitter_password) or (
+            not user.twitter_cookies
+        ):
             raise ValueError("User has no twitter credentials")
 
         twitter = await self._get_twitter(user.telegram_id)
@@ -166,6 +168,10 @@ class Bot:
             pass
         return None
 
+    async def auto_login(self) -> None:
+        for user in User.select().where(User.twitter_cookies.is_null(False)):
+            await self._get_logged_in_twitter(user)
+
     async def post_init(self, application: Application) -> None:  # type: ignore[type-arg]
         self.logger.info("Sklad Started")
         await application.bot.set_my_commands(
@@ -174,6 +180,8 @@ class Bot:
                 ("tweet", "Send a tweet by id or url"),
             ]
         )
+
+        await self.auto_login()
 
     async def post_stop(self, application: Application) -> None:  # type: ignore[type-arg]
         self.logger.info("Sklad Stopped")
