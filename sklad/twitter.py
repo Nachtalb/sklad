@@ -11,7 +11,10 @@ from yarl import URL
 
 from sklad.db import DATABASE, Tweet, User
 
-TwitterMedia = TypedDict("TwitterMedia", {"type": str, "url": str, "width": int, "height": int, "thumbnail_url": str})
+TwitterMedia = TypedDict(
+    "TwitterMedia",
+    {"type": str, "url": str, "width": int, "height": int, "thumbnail_url": str, "telegram_data": dict[str, Any]},
+)
 
 
 class Twitter:
@@ -57,6 +60,7 @@ class Twitter:
                         width=size["w"],
                         height=size["h"],
                         thumbnail_url=str(url),
+                        telegram_data={},
                     )
                 )
             elif attachment["type"] == "video":
@@ -70,6 +74,7 @@ class Twitter:
                         width=width,
                         height=height,
                         thumbnail_url=thumbnail_url,
+                        telegram_data={},
                     )
                 )
             elif attachment["type"] == "animated_gif":
@@ -83,6 +88,7 @@ class Twitter:
                         width=size["width"],
                         height=size["height"],
                         thumbnail_url=thumbnail_url,
+                        telegram_data={},
                     )
                 )
             else:

@@ -3,8 +3,18 @@ import re
 from asyncio import as_completed
 from typing import Any, cast
 
+from telegram import Animation
 from telegram import Bot as TelegramBot
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, InputMediaVideo, Message, Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    InputMediaPhoto,
+    InputMediaVideo,
+    Message,
+    PhotoSize,
+    Update,
+    Video,
+)
 from telegram.constants import ParseMode
 from telegram.ext import Application, ContextTypes
 from yarl import URL
@@ -55,48 +65,88 @@ class Bot:
         await self._get_logged_in_twitter(user)
         await update.message.reply_text("Logged in as user")
 
-    async def send_single_tweet_attachment(
-        self, attachment: TwitterMedia, message: Message, caption: str | None = None
-    ) -> Message:
+    async def _get_telegram_obj(
+        self, attachment: TwitterMedia, bot: TelegramBot, gif_as_video: bool = False
+    ) -> PhotoSize | Video | Animation | None:
+        if not attachment.get("telegram_data"):
+            return None
+
         if attachment["type"] == "photo":
-            return await message.reply_photo(photo=attachment["url"], caption=caption, parse_mode=ParseMode.HTML)
+            return PhotoSize.de_json(attachment["telegram_data"], bot)
+        elif attachment["type"] == "video" or (attachment["type"] == "gif" and gif_as_video):
+            return Video.de_json(attachment["telegram_data"], bot)
+        elif attachment["type"] == "gif":
+            return Animation.de_json(attachment["telegram_data"], bot)
+        return None
+
+    async def send_single_tweet_attachment(self, tweet: Tweet, message: Message, caption: str | None = None) -> Message:
+        attachment = tweet.attachments[0]
+        telegram_obj = await self._get_telegram_obj(attachment, message.get_bot())
+
+        if attachment["type"] == "photo":
+            telegram_obj = cast(PhotoSize | None, telegram_obj)
+            message = await message.reply_photo(
+                photo=telegram_obj or attachment["url"], caption=caption, parse_mode=ParseMode.HTML
+            )
+            if not telegram_obj:
+                attachment["telegram_data"] = message.photo[0].to_dict()
         elif attachment["type"] == "video":
-            return await message.reply_video(
-                video=attachment["url"],
+            telegram_obj = cast(Video | None, telegram_obj)
+            message = await message.reply_video(
+                video=telegram_obj or attachment["url"],
                 caption=caption,
                 parse_mode=ParseMode.HTML,
-                thumbnail=attachment["thumbnail_url"],
-                width=attachment["width"],
-                height=attachment["height"],
+                thumbnail=attachment["thumbnail_url"] if not telegram_obj else None,
+                width=attachment["width"] if not telegram_obj else None,
+                height=attachment["height"] if not telegram_obj else None,
             )
+            if not telegram_obj:
+                attachment["telegram_data"] = (message.video or message.animation).to_dict()  # type: ignore[union-attr]
         elif attachment["type"] == "gif":
-            return await message.reply_animation(
-                animation=attachment["url"], caption=caption, parse_mode=ParseMode.HTML
+            telegram_obj = cast(Animation | None, telegram_obj)
+            message = await message.reply_animation(
+                animation=telegram_obj or attachment["url"], caption=caption, parse_mode=ParseMode.HTML
             )
+            if not telegram_obj:
+                attachment["telegram_data"] = message.animation.to_dict()  # type: ignore[union-attr]
         else:
             raise ValueError(f"Unknown attachment type: {attachment['type']}")
+        tweet.save()
+        return message
 
     async def send_multi_tweet_attachments(
-        self, attachments: list[TwitterMedia], message: Message, caption: str | None = None
+        self, tweet: Tweet, message: Message, caption: str | None = None
     ) -> tuple[Message, ...]:
+        attachments: list[TwitterMedia] = tweet.attachments
         input_media: list[InputMediaVideo | InputMediaPhoto] = []
         for media in attachments:
+            telegram_obj = await self._get_telegram_obj(media, message.get_bot(), gif_as_video=True)
             if media["type"] == "photo":
-                input_media.append(InputMediaPhoto(media["url"]))
+                telegram_obj = cast(PhotoSize | None, telegram_obj)
+                input_media.append(InputMediaPhoto(telegram_obj or media["url"]))
             elif media["type"] in ("video", "gif"):
+                telegram_obj = cast(Video | None, telegram_obj)
                 input_media.append(
                     InputMediaVideo(
-                        media["url"],
-                        thumbnail=media["thumbnail_url"],
-                        width=media["width"],
-                        height=media["height"],
+                        telegram_obj or media["url"],
+                        thumbnail=media["thumbnail_url"] if not telegram_obj else None,
+                        width=media["width"] if not telegram_obj else None,
+                        height=media["height"] if not telegram_obj else None,
                     )
                 )
             else:
                 self.logger.warning("Unknown attachment type: %s", media["type"])
                 continue
 
-        return await message.reply_media_group(media=input_media, caption=caption, parse_mode=ParseMode.HTML)
+        messages = await message.reply_media_group(media=input_media, caption=caption, parse_mode=ParseMode.HTML)
+        for attachment, message in zip(attachments, messages):
+            if not attachment.get("telegram_data"):
+                if attachment["type"] == "photo":
+                    attachment["telegram_data"] = message.photo[0].to_dict()
+                elif attachment["type"] in ("video", "gif"):
+                    attachment["telegram_data"] = (message.video or message.animation).to_dict()  # type: ignore[union-attr]
+        tweet.save()
+        return messages
 
     def _get_tweet_caption(self, tweet: Tweet) -> str:
         caption = f'{tweet.text}\n\n<a href="{tweet.url}">View on Twitter</a> | <a href="{tweet.user_url}">{tweet.user_name}</a>'
@@ -113,9 +163,9 @@ class Bot:
         if not attachments:
             return (await message.reply_text(caption, parse_mode=ParseMode.HTML),)  # type: ignore[arg-type]
         elif len(attachments) == 1:
-            return (await self.send_single_tweet_attachment(attachments[0], message, caption),)
+            return (await self.send_single_tweet_attachment(tweet, message, caption),)
         else:
-            return await self.send_multi_tweet_attachments(attachments, message, caption)
+            return await self.send_multi_tweet_attachments(tweet, message, caption)
 
     def _check_logged_in(self, user_id: int) -> bool:
         return user_id in self.twitters and self.twitters[user_id].logged_in
@@ -124,7 +174,12 @@ class Bot:
         return re.sub(r"@(\w+)", r'<a href="https://twitter.com/\1">@\1</a>', text)
 
     async def callback_query_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        if not update.effective_user or not update.callback_query or not update.callback_query.data:
+        if (
+            not update.effective_user
+            or not update.callback_query
+            or not update.callback_query.data
+            or not update.callback_query.message
+        ):
             return
 
         query = update.callback_query
@@ -138,60 +193,96 @@ class Bot:
             await query.message.delete()  # type: ignore[union-attr]
             return
 
-        match data["action"]:
-            case "next_tweet":
-                await query.answer("Not implemented")
-            case "previous_tweet":
-                await query.answer("Not implemented")
-            case "send_to_verus:":
-                await query.answer("Not implemented")
-            case "skip_tweet":
-                await query.answer("Not implemented")
-            case _:
-                self.logger.warning("Unknown action: %s", data["action"])
-                await query.answer("Unknown action")
+        if action := getattr(self, f"_button_{data['action']}", None):
+            self.logger.info("Button: Action: %s", data["action"])
+            await query.answer()
+            await action(query.message, data)
+        else:
+            self.logger.warning("Button: Unknown action: %s", data["action"])
+            await query.answer("Unknown action")
+
+            if data.get("delete_if_unknown", False):
+                try:
+                    await query.message.delete()  # type: ignore[union-attr]
+                except Exception as e:
+                    self.logger.error("Error deleting message: %s", e)
 
     def _buttons_to_markup(self, buttons: list[dict[str, Any]], cols: int = 2) -> InlineKeyboardMarkup:
         return InlineKeyboardMarkup(
             [[InlineKeyboardButton(**button) for button in buttons[i : i + cols]] for i in range(0, len(buttons), cols)]
         )
 
+    async def _button_next_tweet(self, message: Message, data: dict[str, Any]) -> None:
+        current_tweet = Tweet.get_or_none(Tweet.id == data["tweet_id"])
+        next_tweet = (
+            Tweet.select().where(Tweet.created_at < current_tweet.created_at).order_by(Tweet.created_at.desc()).first()
+        )
+        await self._new_timeline_tweet(message, data, next_tweet)
+
+    async def _button_previous_tweet(self, message: Message, data: dict[str, Any]) -> None:
+        current_tweet = Tweet.get_or_none(Tweet.id == data["tweet_id"])
+        previous_tweet = (
+            Tweet.select().where(Tweet.created_at > current_tweet.created_at).order_by(Tweet.created_at.asc()).first()
+        )
+        await self._new_timeline_tweet(message, data, previous_tweet)
+
+    async def _new_timeline_tweet(self, message: Message, data: dict[str, Any], tweet: Tweet) -> None:
+        if "message_ids" in data:
+            await message.get_bot().delete_messages(message.chat_id, data["message_ids"])
+
+        if tweet:
+            messages = await self.send_tweet(tweet, message, no_caption=True)
+            data["message_ids"] = [m.message_id for m in messages]
+
+            await self.send_tweet_manage_buttons(
+                message,
+                tweet,
+                data,
+                previous_msg_id=message.message_id,
+            )
+        else:
+            await message.edit_text("No more tweets found")
+
     async def send_tweet_manage_buttons(
-        self, bot: TelegramBot, user_id: int, tweet: Tweet, data: dict[str, Any]
+        self,
+        message: Message,
+        tweet: Tweet,
+        data: dict[str, Any],
+        previous_msg_id: int | None = None,
     ) -> None:
-        if user_id not in self.twitters:
-            return
+        data.update(
+            {
+                "tweet_id": tweet.id,
+            }
+        )
 
-        new_data = {
-            "tweet_id": tweet.id,
-            "user_id": user_id,
-        }
-
-        match data["action"]:
-            case "setup":
-                new_data["message_ids"] = data["message_ids"]
-            case _:
-                return
+        data.pop("action", None)
 
         buttons = [
-            {"text": "Next Tweet", "callback_data": {"action": "next_tweet", **new_data}},
-            {"text": "Previous Tweet", "callback_data": {"action": "previous_tweet", **new_data}},
-            {"text": "Send to Verus", "callback_data": {"action": "send_to_verus", **new_data}},
-            {"text": "Skip Tweet", "callback_data": {"action": "skip_tweet", **new_data}},
+            {"text": "Next Tweet", "callback_data": {"action": "next_tweet", **data}},
+            {"text": "Previous Tweet", "callback_data": {"action": "previous_tweet", **data}},
+            {"text": "Send to Verus", "callback_data": {"action": "send_to_verus", **data}},
         ]
 
-        await bot.send_message(
-            user_id,
-            self._get_tweet_caption(tweet),
-            reply_markup=self._buttons_to_markup(buttons),
-            parse_mode=ParseMode.HTML,
-        )
+        if previous_msg_id:
+            await message.edit_text(
+                text=self._get_tweet_caption(tweet),
+                parse_mode=ParseMode.HTML,
+                reply_markup=self._buttons_to_markup(buttons),
+            )
+        else:
+            await message.reply_text(
+                self._get_tweet_caption(tweet),
+                reply_markup=self._buttons_to_markup(buttons),
+                parse_mode=ParseMode.HTML,
+            )
 
     async def send_latest_tweet(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not update.effective_user or not update.message:
             return
 
-        tweets = Tweet.select().where(Tweet.processed == False).order_by(Tweet.created_at.desc()).limit(1)  # noqa: E712
+        # tweets = Tweet.select().where(Tweet.processed == False).order_by(Tweet.created_at.desc()).limit(1)  # noqa: E712
+        tweets = Tweet.select().order_by(Tweet.created_at.desc()).limit(1)  # noqa: E712
         if not tweets:
             await update.message.reply_text("No tweets found")
             return
@@ -203,10 +294,9 @@ class Bot:
             return
 
         await self.send_tweet_manage_buttons(
-            context.bot,
-            update.effective_user.id,
+            update.message,
             tweets[0],
-            {"action": "setup", "message_ids": [m.message_id for m in messages]},
+            {"message_ids": [m.message_id for m in messages]},
         )
 
     async def get_timeline(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
