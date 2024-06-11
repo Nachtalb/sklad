@@ -90,27 +90,39 @@ class Bot:
     async def send_single_tweet_attachment(self, tweet: Tweet, message: Message, caption: str | None = None) -> Message:
         attachment = tweet.attachments[0]
         telegram_obj = await self._get_telegram_obj(attachment, message.get_bot())
+        filename = URL(attachment["url"]).name
 
         if attachment["type"] == "photo":
             telegram_obj = cast(PhotoSize | None, telegram_obj)
             message = await message.reply_photo(
-                photo=telegram_obj or attachment["url"], caption=caption, parse_mode=ParseMode.HTML
+                photo=telegram_obj or attachment["url"],
+                caption=caption,
+                parse_mode=ParseMode.HTML,
+                filename=filename,
             )
             if not telegram_obj:
                 attachment["telegram_data"] = message.photo[0].to_dict()
         elif attachment["type"] == "video":
             telegram_obj = cast(Video | None, telegram_obj)
             attachment_obj = None
+            thumbnail_obj = None
             if not telegram_obj and attachment["size"] / 1_000_000 > 50:
                 self.logger.info("Video size: %s MB, this might take a while", attachment["size"] / 1_000_000)
+                await message.reply_text(
+                    f"Video size: `{attachment['size'] / 1_000_000:.2f} MB`, this might take a while",
+                    parse_mode=ParseMode.MARKDOWN,
+                )
                 attachment_obj = await self._download_to_buffer(attachment["url"])
+                thumbnail_obj = await self._download_to_buffer(attachment["thumbnail_url"])
+
             message = await message.reply_video(
                 video=telegram_obj or attachment_obj or attachment["url"],
                 caption=caption,
                 parse_mode=ParseMode.HTML,
-                thumbnail=attachment["thumbnail_url"] if not telegram_obj else None,
+                thumbnail=(thumbnail_obj or attachment["thumbnail_url"]) if not telegram_obj else None,
                 width=attachment["width"] if not telegram_obj else None,
                 height=attachment["height"] if not telegram_obj else None,
+                filename=filename,
                 read_timeout=60,
                 write_timeout=60,
                 connect_timeout=60,
@@ -120,7 +132,10 @@ class Bot:
         elif attachment["type"] == "gif":
             telegram_obj = cast(Animation | None, telegram_obj)
             message = await message.reply_animation(
-                animation=telegram_obj or attachment["url"], caption=caption, parse_mode=ParseMode.HTML
+                animation=telegram_obj or attachment["url"],
+                caption=caption,
+                parse_mode=ParseMode.HTML,
+                filename=filename,
             )
             if not telegram_obj:
                 attachment["telegram_data"] = message.animation.to_dict()  # type: ignore[union-attr]
