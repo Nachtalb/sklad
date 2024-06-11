@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from io import BytesIO
 from pathlib import Path
@@ -13,7 +14,15 @@ from sklad.db import DATABASE, Tweet, User
 
 TwitterMedia = TypedDict(
     "TwitterMedia",
-    {"type": str, "url": str, "width": int, "height": int, "thumbnail_url": str, "telegram_data": dict[str, Any]},
+    {
+        "type": str,
+        "url": str,
+        "width": int,
+        "height": int,
+        "thumbnail_url": str,
+        "telegram_data": dict[str, Any],
+        "size": int,
+    },
 )
 
 
@@ -47,53 +56,67 @@ class Twitter:
         url.with_name(Path(url.name).stem + "." + format)
         return url
 
-    def get_relevant_media_info(self, data: list[dict[str, Any]]) -> list[TwitterMedia]:
-        attachments = []
-        for attachment in data or []:
-            if attachment["type"] == "photo":
-                size = attachment["sizes"]["medium"]
-                url = str(self._custom_img_url(attachment["media_url_https"], size="medium", format="jpg"))
-                attachments.append(
-                    TwitterMedia(
-                        type="photo",
-                        url=str(url),
-                        width=size["w"],
-                        height=size["h"],
-                        thumbnail_url=str(url),
-                        telegram_data={},
-                    )
-                )
-            elif attachment["type"] == "video":
-                url = attachment["video_info"]["variants"][-1]["url"]
-                width, height = (int(s) for s in url.split("/")[-2].split("x"))
-                thumbnail_url = attachment["media_url_https"]
-                attachments.append(
-                    TwitterMedia(
-                        type="video",
-                        url=url,
-                        width=width,
-                        height=height,
-                        thumbnail_url=thumbnail_url,
-                        telegram_data={},
-                    )
-                )
-            elif attachment["type"] == "animated_gif":
-                url = attachment["video_info"]["variants"][-1]["url"]
-                size = attachment["original_info"]
-                thumbnail_url = ""
-                attachments.append(
-                    TwitterMedia(
-                        type="gif",
-                        url=url,
-                        width=size["width"],
-                        height=size["height"],
-                        thumbnail_url=thumbnail_url,
-                        telegram_data={},
-                    )
-                )
-            else:
-                self.logger.warning("Unknown attachment type: %s", attachment["type"])
-                continue
+    async def _head_request(self, url: str) -> dict[str, Any]:
+        async with self.aio_session.head(url) as response:
+            return response.headers  # type: ignore[return-value]
+
+    async def _get_media_size(self, url: str) -> int:
+        headers = await self._head_request(url)
+        return int(headers["Content-Length"])
+
+    async def _get_relevant_media_info(self, attachment: dict[str, Any]) -> TwitterMedia | None:
+        if attachment["type"] == "photo":
+            dimensions = attachment["sizes"]["medium"]
+            url = str(self._custom_img_url(attachment["media_url_https"], size="medium", format="jpg"))
+            dimensions = await self._get_media_size(url)
+
+            return TwitterMedia(
+                type="photo",
+                url=str(url),
+                width=dimensions["w"],
+                height=dimensions["h"],
+                thumbnail_url=str(url),
+                telegram_data={},
+                size=dimensions,
+            )
+        elif attachment["type"] == "video":
+            url = attachment["video_info"]["variants"][-1]["url"]
+            dimensions = await self._get_media_size(url)
+            width, height = (int(s) for s in url.split("/")[-2].split("x"))
+            thumbnail_url = attachment["media_url_https"]
+
+            return TwitterMedia(
+                type="video",
+                url=url,
+                width=width,
+                height=height,
+                thumbnail_url=thumbnail_url,
+                telegram_data={},
+                size=dimensions,
+            )
+        elif attachment["type"] == "animated_gif":
+            url = attachment["video_info"]["variants"][-1]["url"]
+            dimensions = attachment["original_info"]
+            thumbnail_url = ""
+            size = await self._get_media_size(url)
+
+            return TwitterMedia(
+                type="gif",
+                url=url,
+                width=dimensions["width"],
+                height=dimensions["height"],
+                thumbnail_url=thumbnail_url,
+                telegram_data={},
+                size=size,
+            )
+        else:
+            self.logger.warning("Unknown attachment type: %s", attachment["type"])
+        return None
+
+    async def get_relevant_media_info(self, data: list[dict[str, Any]]) -> list[TwitterMedia]:
+        attachments = list(
+            filter(None, await asyncio.gather(*[self._get_relevant_media_info(attachment) for attachment in data]))
+        )
 
         return attachments
 
@@ -110,9 +133,9 @@ class Twitter:
             tweet = await self.client.get_tweet_by_id(str(tweet_id))
         except TweetNotAvailable:
             return None
-        return self._process_tweet(tweet)
+        return await self._process_tweet(tweet)
 
-    def _process_tweet(self, tweet: TwiTweet) -> Tweet:
+    async def _process_tweet(self, tweet: TwiTweet) -> Tweet:
         tweet_object = Tweet.get_or_none(Tweet.tweet_id == tweet.id)
         if tweet_object is None:
             tweet_object = Tweet(
@@ -122,7 +145,7 @@ class Twitter:
                 user_id=tweet.user.id,
                 user_name=tweet.user.name,
                 user_screen_name=tweet.user.screen_name,
-                attachments=self.get_relevant_media_info(tweet.media),
+                attachments=await self.get_relevant_media_info(tweet.media),
             )
             tweet_object.save()
         return tweet_object  # type: ignore[no-any-return]
@@ -132,6 +155,6 @@ class Twitter:
         tweets = await self.client.get_latest_timeline()
 
         with DATABASE.atomic():
-            tweet_objects = [self._process_tweet(tweet) for tweet in tweets]
+            tweet_objects = await asyncio.gather(*[self._process_tweet(tweet) for tweet in tweets])
 
         return tweet_objects

@@ -1,8 +1,10 @@
 import logging
 import re
 from asyncio import as_completed
+from io import BytesIO
 from typing import Any, cast
 
+from aiohttp import ClientSession
 from telegram import Animation
 from telegram import Bot as TelegramBot
 from telegram import (
@@ -28,6 +30,7 @@ class Bot:
         self.logger = logging.getLogger(__name__)
         self.local_mode = local_mode
         self.twitters: dict[int, Twitter] = {}
+        self.aio_session: ClientSession = ClientSession()
 
     async def _get_twitter(self, user_id: int) -> Twitter:
         if user_id not in self.twitters:
@@ -79,6 +82,11 @@ class Bot:
             return Animation.de_json(attachment["telegram_data"], bot)
         return None
 
+    async def _download_to_buffer(self, url: str) -> BytesIO:
+        self.logger.info("Downloading %s", url)
+        async with self.aio_session.get(url) as response:
+            return BytesIO(await response.read())
+
     async def send_single_tweet_attachment(self, tweet: Tweet, message: Message, caption: str | None = None) -> Message:
         attachment = tweet.attachments[0]
         telegram_obj = await self._get_telegram_obj(attachment, message.get_bot())
@@ -92,13 +100,20 @@ class Bot:
                 attachment["telegram_data"] = message.photo[0].to_dict()
         elif attachment["type"] == "video":
             telegram_obj = cast(Video | None, telegram_obj)
+            attachment_obj = None
+            if not telegram_obj and attachment["size"] / 1_000_000 > 50:
+                self.logger.info("Video size: %s MB, this might take a while", attachment["size"] / 1_000_000)
+                attachment_obj = await self._download_to_buffer(attachment["url"])
             message = await message.reply_video(
-                video=telegram_obj or attachment["url"],
+                video=telegram_obj or attachment_obj or attachment["url"],
                 caption=caption,
                 parse_mode=ParseMode.HTML,
                 thumbnail=attachment["thumbnail_url"] if not telegram_obj else None,
                 width=attachment["width"] if not telegram_obj else None,
                 height=attachment["height"] if not telegram_obj else None,
+                read_timeout=60,
+                write_timeout=60,
+                connect_timeout=60,
             )
             if not telegram_obj:
                 attachment["telegram_data"] = (message.video or message.animation).to_dict()  # type: ignore[union-attr]
