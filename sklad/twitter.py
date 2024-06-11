@@ -22,6 +22,7 @@ TwitterMedia = TypedDict(
         "thumbnail_url": str,
         "telegram_data": dict[str, Any],
         "size": int,
+        "duration": int | None,
     },
 )
 
@@ -78,12 +79,14 @@ class Twitter:
                 thumbnail_url=str(url),
                 telegram_data={},
                 size=dimensions,
+                duration=None,
             )
         elif attachment["type"] == "video":
             url = attachment["video_info"]["variants"][-1]["url"]
             dimensions = await self._get_media_size(url)
             width, height = (int(s) for s in url.split("/")[-2].split("x"))
             thumbnail_url = attachment["media_url_https"]
+            duration = attachment["video_info"]["duration_millis"]
 
             return TwitterMedia(
                 type="video",
@@ -93,6 +96,7 @@ class Twitter:
                 thumbnail_url=thumbnail_url,
                 telegram_data={},
                 size=dimensions,
+                duration=int(duration / 1000),
             )
         elif attachment["type"] == "animated_gif":
             url = attachment["video_info"]["variants"][-1]["url"]
@@ -108,6 +112,7 @@ class Twitter:
                 thumbnail_url=thumbnail_url,
                 telegram_data={},
                 size=size,
+                duration=None,
             )
         else:
             self.logger.warning("Unknown attachment type: %s", attachment["type"])

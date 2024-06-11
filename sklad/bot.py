@@ -126,6 +126,7 @@ class Bot:
                 read_timeout=60,
                 write_timeout=60,
                 connect_timeout=60,
+                duration=attachment["duration"] if not telegram_obj else None,
             )
             if not telegram_obj:
                 attachment["telegram_data"] = (message.video or message.animation).to_dict()  # type: ignore[union-attr]
