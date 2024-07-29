@@ -26,11 +26,12 @@ from sklad.twitter import Twitter, TwitterMedia
 
 
 class Bot:
-    def __init__(self, local_mode: bool = False) -> None:
+    def __init__(self, local_mode: bool = False, admins: list[str] = []) -> None:
         self.logger = logging.getLogger(__name__)
         self.local_mode = local_mode
         self.twitters: dict[int, Twitter] = {}
         self.aio_session: ClientSession = ClientSession()
+        self.admins = admins
 
     async def _get_twitter(self, user_id: int) -> Twitter:
         if user_id not in self.twitters:
@@ -453,5 +454,11 @@ class Bot:
 
         await self.auto_login()
 
+        for admin in self.admins:
+            await application.bot.send_message(admin, "Sklad Started")
+
     async def post_stop(self, application: Application) -> None:  # type: ignore[type-arg]
         self.logger.info("Sklad Stopped")
+
+        for admin in self.admins:
+            await application.bot.send_message(admin, "Sklad Stopped")

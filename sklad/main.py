@@ -38,7 +38,8 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    bot = Bot(local_mode=args.local_mode)
+    admins = args.admins.split(",")
+    bot = Bot(local_mode=args.local_mode, admins=admins)
 
     persistence = PicklePersistence(filepath="sklad_bot.dat")
     app = (
@@ -53,7 +54,7 @@ def main() -> None:
         .build()
     )
 
-    users = [filters.User(int(user)) for user in args.admins.split(",")]
+    users = [filters.User(int(user)) for user in admins]
     user_filter = users[0]
     if len(users) > 1:
         user_filter = reduce(lambda x, y: x | y, users)  # type: ignore[return-value, arg-type]
