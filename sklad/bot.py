@@ -2,6 +2,7 @@ import logging
 import re
 from asyncio import as_completed
 from io import BytesIO
+from itertools import chain
 from typing import Any, cast
 
 from aiohttp import ClientSession
@@ -393,50 +394,47 @@ class Bot:
             await update.message.reply_text("You are not logged in.")
             return
 
-        text = set(
-            context.args
-            if context.args
-            else update.message.text.replace("\n", " ").split(" ") if update.message.text else []
-        )
-        if not text:
+        if not update.message.text and not context.args:
             await update.message.reply_text("Please provide a tweet id or url")
             return
 
-        ids = set(filter(None, [self._get_tweet_id_from_text(t) for t in text]))
+        if context.args:
+            text = set(context.args)
+        else:
+            text = set(update.message.text.replace("\n", " ").split(" "))  # type: ignore[union-attr]
+
+        ids = set(map(int, chain.from_iterable(self._get_tweet_id_from_text(tweet_id) for tweet_id in text)))
         if not any(ids):
             await update.message.reply_text("Invalid tweet id or url")
             return
-        elif len(ids) != len(text):
-            await update.message.reply_text("Not all tweet ids or urls are valid or duplicates are present")
 
         twitter = await self._get_twitter(update.effective_user.id)
 
-        not_found = sent = False
+        found = set()
         for future in as_completed([twitter.get_tweet_by_id(tweet_id) for tweet_id in ids]):
             tweet = await future
             if tweet is None:
-                not_found = True
                 continue
-            sent = True
+            found.add(tweet.tweet_id)
             await self.send_tweet(tweet, update.message)
 
-        if not sent:
+        if not found:
             await update.message.reply_text("No tweets found")
-        elif not_found:
-            await update.message.reply_text("Some tweets were not found")
+            return
+        elif found != ids:
+            not_found = map(str, ids - found)
+            base = "https://x.com/i/web/status/"
+            not_found_str = base + f"\n{base}".join(not_found)
 
-    def _get_tweet_id_from_text(self, text: str) -> str | None:
+            await update.message.reply_text(f"Some tweets were not found:\n{not_found_str}")
+
+    def _get_tweet_id_from_text(self, text: str) -> list[str]:
         text = text.strip()
         if text.isdigit():
-            return text
+            return [text]
 
-        try:
-            url = URL(text)
-            if url.name.isdigit():
-                return url.name
-        except ValueError:
-            pass
-        return None
+        matches = re.findall(r"status/(\d+)", text)
+        return matches
 
     async def auto_login(self) -> None:
         for user in User.select().where(User.twitter_cookies.is_null(False)):
