@@ -69,7 +69,7 @@ class Twitter:
         if attachment["type"] == "photo":
             dimensions = attachment["sizes"]["medium"]
             url = str(self._custom_img_url(attachment["media_url_https"], size="medium", format="jpg"))
-            dimensions = await self._get_media_size(url)
+            size = await self._get_media_size(url)
 
             return TwitterMedia(
                 type="photo",
@@ -78,12 +78,12 @@ class Twitter:
                 height=dimensions["h"],
                 thumbnail_url=str(url),
                 telegram_data={},
-                size=dimensions,
+                size=size,
                 duration=None,
             )
         elif attachment["type"] == "video":
             url = attachment["video_info"]["variants"][-1]["url"]
-            dimensions = await self._get_media_size(url)
+            size = await self._get_media_size(url)
             width, height = (int(s) for s in url.split("/")[-2].split("x"))
             thumbnail_url = attachment["media_url_https"]
             duration = attachment["video_info"]["duration_millis"]
@@ -95,7 +95,7 @@ class Twitter:
                 height=height,
                 thumbnail_url=thumbnail_url,
                 telegram_data={},
-                size=dimensions,
+                size=size,
                 duration=int(duration / 1000),
             )
         elif attachment["type"] == "animated_gif":

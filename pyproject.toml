@@ -48,19 +48,16 @@ pretty = true
 strict = true
 
 [[tool.mypy.overrides]]
-module = 'tests'
+module = "tests"
 no_warn_no_return = true
 
 [[tool.mypy.overrides]]
-module = 'peewee'
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = 'playhouse.shortcuts'
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = 'playhouse.sqlite_ext'
+module = [
+    "peewee",
+    "playhouse.shortcuts",
+    "playhouse.sqlite_ext",
+    "twikit.*",
+]
 ignore_missing_imports = true
 
 [tool.poetry.scripts]
