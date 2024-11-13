@@ -26,6 +26,7 @@ def main() -> None:
     parser.add_argument("--base-url", default=TG_BASE_URL, help="Base URL for the bot API")
     parser.add_argument("--local-mode", action="store_true", help="Run the bot in local mode", default=False)
     parser.add_argument("--admins", required=True, type=str, help="List of admin ids, separated by commas.")
+    parser.add_argument("--export", default=None, type=str, help="Path to export files for Verus Bot")
 
     sub_parsers = parser.add_subparsers()
     webhook_parser = sub_parsers.add_parser("webhook")
@@ -39,7 +40,7 @@ def main() -> None:
     args = parser.parse_args()
 
     admins = args.admins.split(",")
-    bot = Bot(local_mode=args.local_mode, admins=admins)
+    bot = Bot(local_mode=args.local_mode, admins=admins, export_folder=args.export)
 
     persistence = PicklePersistence(filepath="sklad_bot.dat")
     app = (

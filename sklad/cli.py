@@ -47,7 +47,7 @@ def list_users(args: argparse.Namespace) -> None:
     data = []
     for user in [user.to_dict() for user in users]:
         user["twitter_password"] = "********"
-        data.append(user.values())
+        data.append(list(user.values())[:-1])
 
     print(
         tabulate(

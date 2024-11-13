@@ -5,9 +5,9 @@ from pathlib import Path
 from typing import Any, TypedDict
 
 from aiohttp import ClientSession
+from twikit import Client
 from twikit.errors import TweetNotAvailable
-from twikit.twikit_async.client import Client
-from twikit.twikit_async.tweet import Tweet as TwiTweet
+from twikit.tweet import Tweet as TwiTweet
 from yarl import URL
 
 from sklad.db import DATABASE, Tweet, User
@@ -29,7 +29,10 @@ TwitterMedia = TypedDict(
 
 class Twitter:
     def __init__(self, local_mode: bool = False) -> None:
-        self.client = Client("en-us")
+        self.client = Client(
+            "en-us",
+            user_agent="Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36",
+        )
         self.local_mode = local_mode
         self.logged_in = False
         self.aio_session: ClientSession = ClientSession()
@@ -63,13 +66,16 @@ class Twitter:
 
     async def _get_media_size(self, url: str) -> int:
         headers = await self._head_request(url)
-        return int(headers["Content-Length"])
+        return int(headers.get("Content-Length", 0))
 
     async def _get_relevant_media_info(self, attachment: dict[str, Any]) -> TwitterMedia | None:
         if attachment["type"] == "photo":
             dimensions = attachment["sizes"]["medium"]
             url = str(self._custom_img_url(attachment["media_url_https"], size="medium", format="jpg"))
             size = await self._get_media_size(url)
+
+            if not size:
+                self.logger.warning("Failed to get size for %s", url)
 
             return TwitterMedia(
                 type="photo",
@@ -78,7 +84,7 @@ class Twitter:
                 height=dimensions["h"],
                 thumbnail_url=str(url),
                 telegram_data={},
-                size=size,
+                size=size or None,
                 duration=None,
             )
         elif attachment["type"] == "video":
@@ -88,6 +94,9 @@ class Twitter:
             thumbnail_url = attachment["media_url_https"]
             duration = attachment["video_info"]["duration_millis"]
 
+            if not size:
+                self.logger.warning("Failed to get size for %s", url)
+
             return TwitterMedia(
                 type="video",
                 url=url,
@@ -95,7 +104,7 @@ class Twitter:
                 height=height,
                 thumbnail_url=thumbnail_url,
                 telegram_data={},
-                size=size,
+                size=size or None,
                 duration=int(duration / 1000),
             )
         elif attachment["type"] == "animated_gif":
@@ -104,6 +113,9 @@ class Twitter:
             thumbnail_url = ""
             size = await self._get_media_size(url)
 
+            if not size:
+                self.logger.warning("Failed to get size for %s", url)
+
             return TwitterMedia(
                 type="gif",
                 url=url,
@@ -111,7 +123,7 @@ class Twitter:
                 height=dimensions["height"],
                 thumbnail_url=thumbnail_url,
                 telegram_data={},
-                size=size,
+                size=size or None,
                 duration=None,
             )
         else:
@@ -119,6 +131,8 @@ class Twitter:
         return None
 
     async def get_relevant_media_info(self, data: list[dict[str, Any]]) -> list[TwitterMedia]:
+        if not data:
+            return []
         attachments = list(
             filter(None, await asyncio.gather(*[self._get_relevant_media_info(attachment) for attachment in data]))
         )

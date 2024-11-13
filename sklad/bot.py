@@ -1,11 +1,12 @@
 import logging
 import re
-from asyncio import as_completed
+from asyncio import as_completed, gather
 from io import BytesIO
 from itertools import chain
 from typing import Any, cast
 
 from aiohttp import ClientSession
+from aiopath import AsyncPath
 from telegram import Animation
 from telegram import Bot as TelegramBot
 from telegram import (
@@ -19,6 +20,7 @@ from telegram import (
     Video,
 )
 from telegram.constants import ParseMode
+from telegram.error import BadRequest
 from telegram.ext import Application, ContextTypes
 from yarl import URL
 
@@ -27,12 +29,15 @@ from sklad.twitter import Twitter, TwitterMedia
 
 
 class Bot:
-    def __init__(self, local_mode: bool = False, admins: list[str] = []) -> None:
+    def __init__(
+        self, local_mode: bool = False, admins: list[str] = [], export_folder: AsyncPath | None = None
+    ) -> None:
         self.logger = logging.getLogger(__name__)
         self.local_mode = local_mode
         self.twitters: dict[int, Twitter] = {}
-        self.aio_session: ClientSession = ClientSession()
+        self.aio_session: ClientSession = None
         self.admins = admins
+        self.export_folder = AsyncPath(export_folder) if export_folder else None
 
     async def _get_twitter(self, user_id: int) -> Twitter:
         if user_id not in self.twitters:
@@ -41,7 +46,7 @@ class Bot:
         return self.twitters[user_id]
 
     async def _get_logged_in_twitter(self, user: User) -> Twitter:
-        if (not user.twitter_username or not user.twitter_email or not user.twitter_password) or (
+        if (not user.twitter_username or not user.twitter_email or not user.twitter_password) and (
             not user.twitter_cookies
         ):
             raise ValueError("User has no twitter credentials")
@@ -94,21 +99,33 @@ class Bot:
         telegram_obj = await self._get_telegram_obj(attachment, message.get_bot())
         filename = URL(attachment["url"]).name
 
+        self.logger.info("Sending attachment: %s", attachment["url"])
         if attachment["type"] == "photo":
             telegram_obj = cast(PhotoSize | None, telegram_obj)
-            message = await message.reply_photo(
-                photo=telegram_obj or attachment["url"],
-                caption=caption,
-                parse_mode=ParseMode.HTML,
-                filename=filename,
-            )
-            if not telegram_obj:
+            self.logger.info(f"wtf {telegram_obj} {attachment['url']}")
+            try:
+                message = await message.reply_photo(
+                    photo=telegram_obj or attachment["url"],
+                    caption=caption,
+                    parse_mode=ParseMode.HTML,
+                    filename=filename,
+                )
+                if not telegram_obj:
+                    attachment["telegram_data"] = message.photo[0].to_dict()
+            except BadRequest:
+                message = await message.reply_photo(
+                    photo=attachment["url"],
+                    caption=caption,
+                    parse_mode=ParseMode.HTML,
+                    filename=filename,
+                )
                 attachment["telegram_data"] = message.photo[0].to_dict()
+
         elif attachment["type"] == "video":
             telegram_obj = cast(Video | None, telegram_obj)
             attachment_obj = None
             thumbnail_obj = None
-            if not telegram_obj and attachment["size"] / 1_000_000 > 50:
+            if not telegram_obj and attachment["size"] and attachment["size"] / 1_000_000 > 50:
                 self.logger.info("Video size: %s MB, this might take a while", attachment["size"] / 1_000_000)
                 await message.reply_text(
                     f"Video size: `{attachment['size'] / 1_000_000:.2f} MB`, this might take a while",
@@ -117,31 +134,54 @@ class Bot:
                 attachment_obj = await self._download_to_buffer(attachment["url"])
                 thumbnail_obj = await self._download_to_buffer(attachment["thumbnail_url"])
 
-            message = await message.reply_video(
-                video=telegram_obj or attachment_obj or attachment["url"],
-                caption=caption,
-                parse_mode=ParseMode.HTML,
-                thumbnail=(thumbnail_obj or attachment["thumbnail_url"]) if not telegram_obj else None,
-                width=attachment["width"] if not telegram_obj else None,
-                height=attachment["height"] if not telegram_obj else None,
-                filename=filename,
-                read_timeout=60,
-                write_timeout=60,
-                connect_timeout=60,
-                duration=attachment["duration"] if not telegram_obj else None,
-            )
-            if not telegram_obj:
-                attachment["telegram_data"] = (message.video or message.animation).to_dict()  # type: ignore[union-attr]
+            self.logger.info(f"wtf {telegram_obj} {attachment_obj} {attachment['url']}")
+            try:
+                message = await message.reply_video(
+                    video=telegram_obj or attachment_obj or attachment["url"],
+                    caption=caption,
+                    parse_mode=ParseMode.HTML,
+                    thumbnail=(thumbnail_obj or attachment["thumbnail_url"]) if not telegram_obj else None,
+                    width=attachment["width"] if not telegram_obj else None,
+                    height=attachment["height"] if not telegram_obj else None,
+                    filename=filename,
+                    read_timeout=60,
+                    write_timeout=60,
+                    connect_timeout=60,
+                    duration=attachment["duration"] if not telegram_obj else None,
+                )
+                if not telegram_obj:
+                    attachment["telegram_data"] = (message.video or message.animation).to_dict()  # type: ignore[union-attr]
+            except BadRequest:
+                message = await message.reply_video(
+                    video=attachment["url"],
+                    caption=caption,
+                    parse_mode=ParseMode.HTML,
+                    thumbnail=attachment["thumbnail_url"],
+                    width=attachment["width"],
+                    height=attachment["height"],
+                    filename=filename,
+                    duration=attachment["duration"],
+                )
+                attachment["telegram_data"] = (message.video or message.animation).to_dict()
         elif attachment["type"] == "gif":
             telegram_obj = cast(Animation | None, telegram_obj)
-            message = await message.reply_animation(
-                animation=telegram_obj or attachment["url"],
-                caption=caption,
-                parse_mode=ParseMode.HTML,
-                filename=filename,
-            )
-            if not telegram_obj:
-                attachment["telegram_data"] = message.animation.to_dict()  # type: ignore[union-attr]
+            try:
+                message = await message.reply_animation(
+                    animation=telegram_obj or attachment["url"],
+                    caption=caption,
+                    parse_mode=ParseMode.HTML,
+                    filename=filename,
+                )
+                if not telegram_obj:
+                    attachment["telegram_data"] = message.animation.to_dict()  # type: ignore[union-attr]
+            except BadRequest:
+                message = await message.reply_animation(
+                    animation=attachment["url"],
+                    caption=caption,
+                    parse_mode=ParseMode.HTML,
+                    filename=filename,
+                )
+                attachment["telegram_data"] = message.animation.to_dict()
         else:
             raise ValueError(f"Unknown attachment type: {attachment['type']}")
         tweet.save()
@@ -254,7 +294,11 @@ class Bot:
             .order_by(Tweet.created_at.desc())
             .first()
         )
-        await self._new_timeline_tweet(message, data, next_tweet)
+        try:
+            await self._new_timeline_tweet(message, data, next_tweet)
+        except ValueError:
+            data = {"tweet_id": next_tweet.id}
+            await self._button_next_tweet(message, data)
 
     async def _button_previous_tweet(self, message: Message, data: dict[str, Any]) -> None:
         current_tweet = Tweet.get_or_none(Tweet.id == data["tweet_id"])
@@ -264,7 +308,11 @@ class Bot:
             .order_by(Tweet.created_at.asc())
             .first()
         )
-        await self._new_timeline_tweet(message, data, previous_tweet)
+        try:
+            await self._new_timeline_tweet(message, data, previous_tweet)
+        except ValueError:
+            data = {"tweet_id": previous_tweet.id}
+            await self._button_previous_tweet(message, data)
 
     async def _button_reset_progress(self, message: Message, data: dict[str, Any]) -> None:
         tweet = Tweet.get_or_none(Tweet.id == data["tweet_id"])
@@ -274,7 +322,22 @@ class Bot:
         processed = Tweet.update(processed=False).where(Tweet.processed == True)  # noqa: E712
         processed.execute()
 
-        await self._new_timeline_tweet(message, data, tweet)
+        try:
+            await self._new_timeline_tweet(message, data, tweet)
+        except ValueError:
+            data = {"tweet_id": tweet.id}
+            await self._button_reset_progress(message, data)
+
+    async def _download_to_file(self, url: str, path: AsyncPath, group: str | None = None) -> AsyncPath:
+        path = path / URL(url).name
+        if group:
+            path = path.with_stem(f"{path.stem}_p{group}")
+
+        async with self.aio_session.get(url) as response:
+            async with path.open("wb") as file:
+                async for chunk in response.content.iter_any():
+                    await file.write(chunk)
+        return path
 
     async def _button_send_to_verus(self, message: Message, data: dict[str, Any]) -> None:
         tweet = Tweet.get_or_none(Tweet.id == data["tweet_id"])
@@ -283,6 +346,18 @@ class Bot:
 
         tweet.processed = True
         tweet.save()
+
+        if self.export_folder and await self.export_folder.is_dir():
+            group = tweet.id if len(tweet.attachments) > 1 else None
+            download_tasks = [
+                self._download_to_file(
+                    attachment["url"],
+                    self.export_folder,
+                    group=group,
+                )
+                for i, attachment in enumerate(tweet.attachments)
+            ]
+            await gather(*download_tasks)
 
         await self._button_next_tweet(message, data)
 
@@ -326,8 +401,8 @@ class Bot:
         data.pop("action", None)
 
         buttons = [
-            {"text": "Next Tweet", "callback_data": {"action": "next_tweet", **data}},
             {"text": "Previous Tweet", "callback_data": {"action": "previous_tweet", **data}},
+            {"text": "Next Tweet", "callback_data": {"action": "next_tweet", **data}},
             {"text": "Send to Verus", "callback_data": {"action": "send_to_verus", **data}},
             {"text": "Reset Progress", "callback_data": {"action": "reset_progress", **data}},
             {"text": "To Latest", "callback_data": {"action": "to_latest", **data}},
@@ -356,6 +431,8 @@ class Bot:
             await update.message.reply_text("No tweets found")
             return
 
+        self.logger.info("Sending latest tweet")
+        self.logger.info(f"Tweet: {tweets[0]}")
         messages = await self.send_tweet(tweets[0], update.message, no_caption=True)
 
         if not messages:
@@ -442,6 +519,7 @@ class Bot:
 
     async def post_init(self, application: Application) -> None:  # type: ignore[type-arg]
         self.logger.info("Sklad Started")
+        self.aio_session = ClientSession()
         await application.bot.set_my_commands(
             [
                 ("login", "Login into twitter"),
@@ -453,10 +531,18 @@ class Bot:
         await self.auto_login()
 
         for admin in self.admins:
-            await application.bot.send_message(admin, "Sklad Started")
+            try:
+                await application.bot.send_message(admin, "Sklad Started")
+            except BadRequest:
+                self.logger.error("Error sending message to admin %s", admin)
 
     async def post_stop(self, application: Application) -> None:  # type: ignore[type-arg]
         self.logger.info("Sklad Stopped")
 
+        await self.aio_session.close()
+
         for admin in self.admins:
-            await application.bot.send_message(admin, "Sklad Stopped")
+            try:
+                await application.bot.send_message(admin, "Sklad Stopped")
+            except BadRequest:
+                self.logger.error("Error sending message to admin %s", admin)
